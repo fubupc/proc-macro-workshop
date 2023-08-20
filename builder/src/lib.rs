@@ -147,17 +147,9 @@ fn parse_builder_attr<'a>(attrs: &'a [Attribute]) -> syn::Result<Option<Ident>> 
                 ));
             }
             match kv.lit {
-                Lit::Str(name) => Ok(Some(Ident::new(&name.value(), name.span()))),
+                Lit::Str(name) => Ok(Some(name.parse::<Ident>()?)),
                 _ => Err(syn::Error::new(kv.lit.span(), "expected literal string")),
             }
-            // // Expect Vec<T>
-            // match parse_vec(ty)? {
-            //     Some(elem) => Ok(Some((Ident::new(&name.value(), name.span()), elem))),
-            //     None => Err(syn::Error::new(
-            //         ty.span(),
-            //         "#[builder] can only apply to Vec<T>",
-            //     )),
-            // }
         }
         [_, dup, ..] => Err(syn::Error::new(
             dup.span(),
