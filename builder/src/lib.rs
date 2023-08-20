@@ -9,17 +9,19 @@ use syn::{
 pub fn builder_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    impl_builder_derive(&input).into()
+    impl_builder_derive(&input)
+        .unwrap_or_else(|e| e.into_compile_error())
+        .into()
 }
 
-fn impl_builder_derive(input: &DeriveInput) -> proc_macro2::TokenStream {
-    let struct_ident = &input.ident;
-    let builder_ident = format_ident!("{}Builder", struct_ident);
-
+fn impl_builder_derive(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let strukt = match &input.data {
         Struct(s) => s,
-        _ => return syn::Error::new(input.span(), "expected struct type").into_compile_error(),
+        _ => return Err(syn::Error::new(input.span(), "expected struct type")),
     };
+
+    let struct_ident = &input.ident;
+    let builder_ident = format_ident!("{}Builder", struct_ident);
 
     let field_classes = strukt
         .fields
@@ -31,11 +33,7 @@ fn impl_builder_derive(input: &DeriveInput) -> proc_macro2::TokenStream {
                 "unnamed field not supported",
             )),
         })
-        .collect::<syn::Result<Vec<_>>>();
-    let field_classes = match field_classes {
-        Err(e) => return e.into_compile_error(),
-        Ok(v) => v,
-    };
+        .collect::<syn::Result<Vec<_>>>()?;
 
     let field_defs = field_classes.iter().map(|(ident, class)| match class {
         FieldClass::Nominal(ty) | FieldClass::Optional(ty) => {
@@ -74,7 +72,7 @@ fn impl_builder_derive(input: &DeriveInput) -> proc_macro2::TokenStream {
         }
     });
 
-    quote!(
+    Ok(quote!(
         pub struct #builder_ident {
             #(#field_defs),*
         }
@@ -96,7 +94,7 @@ fn impl_builder_derive(input: &DeriveInput) -> proc_macro2::TokenStream {
             }
         }
 
-    )
+    ))
 }
 
 enum FieldClass<'a> {
