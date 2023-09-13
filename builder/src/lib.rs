@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     parse_macro_input, spanned::Spanned, AngleBracketedGenericArguments, Attribute, Data,
-    DeriveInput, Error, Field, Ident, Lit, MetaNameValue, Path, PathArguments, Result, Type,
+    DeriveInput, Error, Field, Ident, Lit, Meta, NestedMeta, Path, PathArguments, Result, Type,
     TypePath,
 };
 
@@ -135,19 +135,22 @@ fn parse_builder_attr<'a>(attrs: &'a [Attribute]) -> Result<Option<Ident>> {
     match builders.as_slice() {
         [] => Ok(None),
         [builder] => {
-            let kv: MetaNameValue = builder
-                .parse_args()
-                .map_err(|_| Error::new(builder.span(), "expected `builder(each = \"...\")`"))?;
-            if !kv.path.is_ident("each") {
-                return Err(Error::new(
-                    kv.span(),
-                    "expected `each` in `#[builder]` argument path",
-                ));
+            let meta = builder.parse_meta()?;
+            if let Meta::List(ml) = &meta {
+                if ml.nested.len() == 1 {
+                    if let NestedMeta::Meta(Meta::NameValue(kv)) = ml.nested.first().unwrap() {
+                        if kv.path.is_ident("each") {
+                            if let Lit::Str(name) = &kv.lit {
+                                return Ok(Some(name.parse::<Ident>()?));
+                            }
+                        }
+                    }
+                }
             }
-            match kv.lit {
-                Lit::Str(name) => Ok(Some(name.parse::<Ident>()?)),
-                _ => Err(Error::new(kv.lit.span(), "expected literal string")),
-            }
+            Err(Error::new(
+                meta.span(),
+                r#"expected `builder(each = "...")`"#,
+            ))
         }
         [_, dup, ..] => Err(Error::new(dup.span(), "duplicated `#[builder]` attribute")),
     }
