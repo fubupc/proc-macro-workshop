@@ -14,6 +14,12 @@
 use bitfield::*;
 
 #[bitfield]
+enum Hello {
+    Hi,
+    World,
+}
+
+#[bitfield]
 pub struct MyFourBytes {
     a: B1,
     b: B3,
