@@ -19,13 +19,10 @@ pub fn seq(input: TokenStream) -> TokenStream {
 }
 
 fn impl_seq(seq: &Seq) -> Result<TokenStream2> {
-    let start: usize = seq.start.base10_parse()?;
-    let end: usize = seq.end.base10_parse()?;
-
-    let range = if seq.inclusive.is_some() {
-        start..end + 1
+    let range = if seq.inclusive {
+        seq.start..seq.end + 1
     } else {
-        start..end
+        seq.start..seq.end
     };
 
     if contains_repeat_section(seq.content.clone())? {
@@ -211,26 +208,27 @@ fn process_ident(stream: TokenStream2, seq_ident: &Ident, num: usize) -> Result<
 
 struct Seq {
     ident: Ident,
-    in_token: Token![in],
-    start: LitInt,
-    dot2_token: Token![..],
-    inclusive: Option<Token![=]>,
-    end: LitInt,
-    brace_token: token::Brace,
+    start: usize,
+    inclusive: bool,
+    end: usize,
     content: TokenStream2,
 }
 
 impl Parse for Seq {
     fn parse(input: ParseStream) -> Result<Self> {
+        let ident: Ident = input.parse()?;
+        let _in_token: Token![in] = input.parse()?;
+        let start = input.parse::<LitInt>()?.base10_parse()?;
+        let _dot2_token: Token![..] = input.parse()?;
+        let inclusive = input.parse::<Option<Token![=]>>()?.is_some();
+        let end = input.parse::<LitInt>()?.base10_parse()?;
         let content;
+        let _brace_token: token::Brace = braced!(content in input);
         Ok(Seq {
-            ident: input.parse()?,
-            in_token: input.parse()?,
-            start: input.parse()?,
-            dot2_token: input.parse()?,
-            inclusive: input.parse()?,
-            end: input.parse()?,
-            brace_token: braced!(content in input),
+            ident,
+            start,
+            inclusive,
+            end,
             content: content.parse()?,
         })
     }
