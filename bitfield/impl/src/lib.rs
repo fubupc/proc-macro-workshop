@@ -48,22 +48,23 @@ fn bitfield_struct(strukt: ItemStruct) -> Result<TokenStream2> {
     let attrs = &strukt.attrs;
     let vis = &strukt.vis;
 
-    let total_bits_const = format_ident!("__TOTAL_BITS_OF_{}__", name);
     let total_bits = calc_total_bits(fields);
     let (getters, setters) = gen_accessors(&fields);
 
     Ok(quote!(
-        #[allow(non_upper_case_globals)]
-        const #total_bits_const: usize = #total_bits;
 
         #(#attrs)*
         #vis struct #name {
-            data: [u8; #total_bits_const / 8]
+            data: [u8; #total_bits / 8]
         }
 
         impl #name {
             fn new() -> #name {
-                #name{data: [0u8; #total_bits_const / 8]}
+                const _: () = if (#total_bits % 8 != 0) {
+                    panic!("expected total bit size of struct is multiple of 8");
+                };
+
+                #name{data: [0u8; #total_bits / 8]}
             }
 
             #(#getters)*
@@ -78,7 +79,7 @@ fn calc_total_bits(fields: &FieldsNamed) -> TokenStream2 {
         let ty = &f.ty;
         quote!(<#ty as ::bitfield::Specifier>::BITS)
     });
-    quote!(#(#bit_infos)+*)
+    quote!( (#(#bit_infos)+*) )
 }
 
 fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>) {
