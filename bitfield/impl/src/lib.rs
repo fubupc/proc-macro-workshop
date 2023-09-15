@@ -2,10 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    spanned::Spanned,
-    Error, Fields, FieldsNamed, Item, ItemEnum, ItemStruct, LitInt, Result,
+    parse_macro_input, spanned::Spanned, Error, Fields, FieldsNamed, Item, ItemEnum, ItemStruct,
+    Result,
 };
 
 #[proc_macro_attribute]
@@ -90,9 +88,6 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
     for f in &fields.named {
         let ty = &f.ty;
         let vis = &f.vis;
-
-        let _tmp = f.ident.as_ref().unwrap();
-
         let consts = quote!(
             const FIELD_BIT_OFFSET: usize = #curr_offset;
             const FIELD_BITS: usize = <#ty as ::bitfield::Specifier>::BITS;
@@ -101,22 +96,23 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
             const END_BYTE_INDEX: usize = (FIELD_BIT_OFFSET + FIELD_BITS) / 8;
             const END_BIT_OFFSET: usize = (FIELD_BIT_OFFSET + FIELD_BITS) % 8;
         );
+        let back_type = quote!(<#ty as ::bitfield::Specifier>::BackType);
 
         let getter_name = format_ident!("get_{}", f.ident.as_ref().unwrap());
         getters.push(quote!(
-            #vis fn #getter_name(&self) -> u64 {
+            #vis fn #getter_name(&self) -> #back_type {
                 #consts
 
                 if START_BYTE_INDEX == END_BYTE_INDEX {
-                    return ((self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) >> (8 - END_BIT_OFFSET)) as u64
+                    return ((self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) >> (8 - END_BIT_OFFSET)) as #back_type
                 }
 
-                let mut r: u64 = (self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) as u64;
+                let mut r: #back_type = (self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) as #back_type;
                 for i in START_BYTE_INDEX+1..END_BYTE_INDEX {
-                    r = (r << 8) | self.data[i] as u64
+                    r = (r << 8) | self.data[i] as #back_type
                 }
                 if END_BIT_OFFSET > 0 {
-                    r = (r << END_BIT_OFFSET) | (self.data[END_BYTE_INDEX] >> (8 - END_BIT_OFFSET)) as u64;
+                    r = (r << END_BIT_OFFSET) | (self.data[END_BYTE_INDEX] >> (8 - END_BIT_OFFSET)) as #back_type;
                 }
                 r
             }
@@ -124,7 +120,7 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
 
         let setter_name = format_ident!("set_{}", f.ident.as_ref().unwrap());
         setters.push(quote!(
-            #vis fn #setter_name(&mut self, v: u64) {
+            #vis fn #setter_name(&mut self, v: #back_type) {
                 #consts
 
                 // Safe guard: check input value range
@@ -155,34 +151,29 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
 }
 
 #[proc_macro]
-pub fn gen_b_types(input: TokenStream) -> TokenStream {
-    let gen = parse_macro_input!(input as GenBTypes);
-
-    impl_gen_b_types(gen)
+pub fn gen_b_types(_: TokenStream) -> TokenStream {
+    impl_gen_b_types()
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 
-struct GenBTypes {
-    max: usize,
-}
-impl Parse for GenBTypes {
-    fn parse(input: ParseStream) -> Result<Self> {
-        Ok(GenBTypes {
-            max: input.parse::<LitInt>()?.base10_parse()?,
-        })
-    }
-}
-
-fn impl_gen_b_types(gen: GenBTypes) -> Result<TokenStream2> {
-    (1..=gen.max)
+fn impl_gen_b_types() -> Result<TokenStream2> {
+    (1_usize..=64)
         .map(|n| {
             let name = format_ident!("B{}", n);
+            let back_type = match n {
+                1..=8 => quote!(u8),
+                9..=16 => quote!(u16),
+                17..=32 => quote!(u32),
+                33..=64 => quote!(u64),
+                _ => unreachable!(),
+            };
             Ok(quote!(
                 pub enum #name {}
 
                 impl crate::Specifier for #name {
                     const BITS: usize = #n;
+                    type BackType = #back_type;
                 }
             ))
         })

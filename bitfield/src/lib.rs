@@ -14,14 +14,7 @@ pub use bitfield_impl::bitfield;
 
 pub trait Specifier {
     const BITS: usize;
+    type BackType;
 }
 
-impl<T, const N: usize> Specifier for [T; N]
-where
-    T: Specifier,
-{
-    const BITS: usize = T::BITS * N;
-}
-
-use bitfield_impl::gen_b_types;
-gen_b_types!(32);
+bitfield_impl::gen_b_types!();
