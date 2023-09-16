@@ -10,32 +10,16 @@ pub(crate) fn generate(item: Item) -> Result<TokenStream2> {
     let name = &e.ident;
     let bits_attr = parse_bits_attr(&e.attrs)?;
     let bits = check_enum_variants_num(&e, bits_attr)?;
-
-    let match_arms = e
-        .variants
-        .iter()
-        .map(|v| match &v.discriminant {
-            Some((_, expr)) => {
-                let v_ident = &v.ident;
-                Ok(quote!( #expr => #name::#v_ident))
-            }
-            None => Err(Error::new(
-                v.span(),
-                "#derive[BitfieldSpecifier]: expected explicit discriminant",
-            )),
-        })
-        .collect::<Result<Vec<_>>>()?;
-
+    let var_idents: Vec<_> = e.variants.iter().map(|v| &v.ident).collect();
     let (get_type, from_fn) = if bits_attr.is_some() {
         (
-            quote!( ::std::result::Result<#name> ),
+            quote!( ::std::result::Result<#name, ::bitfield::Unrecognized> ),
             quote!(
                 fn from_u64(v: u64) -> Self::Get {
-                    let e = match v {
-                        #(#match_arms,)*
-                        _ => return ::std::result::Result::Err(::bitfield::Unrecognized{raw: v}),
-                    };
-                    ::std::result::Result::Ok(e)
+                    match v {
+                        #(x if x == #name::#var_idents as u64 => ::std::result::Result::Ok(#name::#var_idents),)*
+                        _ => ::std::result::Result::Err(::bitfield::Unrecognized{raw: v}),
+                    }
                 }
             ),
         )
@@ -45,7 +29,7 @@ pub(crate) fn generate(item: Item) -> Result<TokenStream2> {
             quote!(
                 fn from_u64(v: u64) -> Self::Get {
                     match v {
-                        #(#match_arms,)*
+                        #(x if x == #name::#var_idents as u64 => #name::#var_idents,)*
                         _ => ::std::panic!("#[bitfield] BitfieldSpecifier derive macro bug")
                     }
                 }
@@ -96,7 +80,7 @@ fn check_enum_variants_num(e: &ItemEnum, bits_attr: Option<(usize, &Attribute)>)
             let max: usize = !0 >> (64 - bits);
             if e.variants.len() > max {
                 return Err(Error::new(
-                    attr.span(),
+                    attr.meta.span(),
                     format!("enum has too many variants to fit in {} bits", bits),
                 ));
             }

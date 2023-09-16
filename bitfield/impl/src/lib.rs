@@ -5,6 +5,7 @@ mod bitfield;
 mod derive_specifier;
 mod gen_b_types;
 
+/// Generate bitfield type for struct.
 #[proc_macro_attribute]
 pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
     let _ = args;
@@ -15,6 +16,7 @@ pub fn bitfield(args: TokenStream, input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Generate B1, B2, ..., B64 types implement trait `Specifier`.
 #[proc_macro]
 pub fn gen_b_types(_: TokenStream) -> TokenStream {
     gen_b_types::generate()
@@ -22,6 +24,7 @@ pub fn gen_b_types(_: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Derive macro generating an impl of trait `Specifier` on enum.
 #[proc_macro_derive(BitfieldSpecifier, attributes(bits))]
 pub fn derive_specifier(input: TokenStream) -> TokenStream {
     let item = parse_macro_input!(input as Item);

@@ -21,6 +21,7 @@ pub trait Specifier {
     fn into_u64(v: Self::Set) -> u64;
 }
 
+#[derive(Debug)]
 pub struct Unrecognized {
     pub raw: u64,
 }

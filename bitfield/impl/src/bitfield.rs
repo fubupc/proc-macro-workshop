@@ -79,7 +79,7 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
         let getter_name = format_ident!("get_{}", f.ident.as_ref().unwrap());
         getters.push(quote!(
             #vis fn #getter_name(&self) -> #as_specifier::Get {
-                <#ty as ::bitfield::Specifier>::from_u64(::bitfield::read_bits(&self.data, #curr_offset, #as_specifier::BITS))
+                #as_specifier::from_u64(::bitfield::read_bits(&self.data, #curr_offset, #as_specifier::BITS))
             }
         ));
 
