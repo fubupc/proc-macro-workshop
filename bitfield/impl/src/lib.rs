@@ -88,63 +88,23 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
     for f in &fields.named {
         let ty = &f.ty;
         let vis = &f.vis;
-        let consts = quote!(
-            const FIELD_BIT_OFFSET: usize = #curr_offset;
-            const FIELD_BITS: usize = <#ty as ::bitfield::Specifier>::BITS;
-            const START_BYTE_INDEX: usize = FIELD_BIT_OFFSET / 8;
-            const START_BIT_OFFSET: usize = FIELD_BIT_OFFSET % 8;
-            const END_BYTE_INDEX: usize = (FIELD_BIT_OFFSET + FIELD_BITS) / 8;
-            const END_BIT_OFFSET: usize = (FIELD_BIT_OFFSET + FIELD_BITS) % 8;
-        );
-        let back_type = quote!(<#ty as ::bitfield::Specifier>::BackType);
+        let as_specifier = quote!(<#ty as ::bitfield::Specifier>);
 
         let getter_name = format_ident!("get_{}", f.ident.as_ref().unwrap());
         getters.push(quote!(
-            #vis fn #getter_name(&self) -> #back_type {
-                #consts
-
-                if START_BYTE_INDEX == END_BYTE_INDEX {
-                    return ((self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) >> (8 - END_BIT_OFFSET)) as #back_type
-                }
-
-                let mut r: #back_type = (self.data[START_BYTE_INDEX] & (!0 >> START_BIT_OFFSET)) as #back_type;
-                for i in START_BYTE_INDEX+1..END_BYTE_INDEX {
-                    r = (r << 8) | self.data[i] as #back_type
-                }
-                if END_BIT_OFFSET > 0 {
-                    r = (r << END_BIT_OFFSET) | (self.data[END_BYTE_INDEX] >> (8 - END_BIT_OFFSET)) as #back_type;
-                }
-                r
+            #vis fn #getter_name(&self) -> #as_specifier::BackType {
+                <#ty as ::bitfield::Specifier>::from_u64(::bitfield::read_bits(&self.data, #curr_offset, #as_specifier::BITS))
             }
         ));
 
         let setter_name = format_ident!("set_{}", f.ident.as_ref().unwrap());
         setters.push(quote!(
-            #vis fn #setter_name(&mut self, v: #back_type) {
-                #consts
-
-                // Safe guard: check input value range
-                if v & (!0 << FIELD_BITS) != 0 {
-                    panic!("{}: input value is out of bits range", stringify!(#setter_name));
-                }
-
-                if START_BYTE_INDEX == END_BYTE_INDEX {
-                    let mask: u8 = !(!0 >> START_BIT_OFFSET) | (!0 >> END_BIT_OFFSET);
-                    self.data[START_BYTE_INDEX] = (self.data[START_BYTE_INDEX] & mask) | (v << (8 - END_BIT_OFFSET)) as u8;
-                    return;
-                }
-
-                self.data[START_BYTE_INDEX] = (self.data[START_BYTE_INDEX] & !(!0 >> START_BIT_OFFSET)) | (v >> (FIELD_BITS + START_BIT_OFFSET - 8)) as u8;
-                for i in START_BYTE_INDEX+1..END_BYTE_INDEX {
-                    self.data[i] = (v >> (FIELD_BITS + START_BIT_OFFSET - 8 - 8*(i-START_BYTE_INDEX))) as u8;
-                }
-                if END_BIT_OFFSET > 0 {
-                    self.data[END_BYTE_INDEX] = (self.data[END_BYTE_INDEX] & (!0 >> END_BIT_OFFSET)) | (v << (8 - END_BIT_OFFSET)) as u8;
-                }
+            #vis fn #setter_name(&mut self, v: #as_specifier::BackType) {
+               ::bitfield::write_bits(&mut self.data, #curr_offset, #as_specifier::BITS, #as_specifier::into_u64(v))
             }
         ));
 
-        curr_offset = quote!(#curr_offset + <#ty as ::bitfield::Specifier>::BITS);
+        curr_offset = quote!(#curr_offset + #as_specifier::BITS);
     }
 
     (getters, setters)
@@ -174,6 +134,14 @@ fn impl_gen_b_types() -> Result<TokenStream2> {
                 impl crate::Specifier for #name {
                     const BITS: usize = #n;
                     type BackType = #back_type;
+
+                    fn from_u64(v: u64) -> #back_type {
+                        v as #back_type
+                    }
+
+                    fn into_u64(v: #back_type) -> u64 {
+                        v as u64
+                    }
                 }
             ))
         })
