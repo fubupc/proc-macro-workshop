@@ -90,7 +90,7 @@ fn check_enum_variants_num(e: &ItemEnum, bits_attr: Option<(usize, &Attribute)>)
             if !e.variants.len().is_power_of_two() {
                 return Err(Error::new(
                     Span::call_site(),
-                    "expected enum to have a power-of-two number of variants, or use #[bits = N]",
+                    "BitfieldSpecifier expected a number of variants which is a power of 2",
                 ));
             }
             Ok(e.variants.len().ilog2() as usize)
