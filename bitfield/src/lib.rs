@@ -10,14 +10,33 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-pub use bitfield_impl::bitfield;
+pub use bitfield_impl::{bitfield, BitfieldSpecifier};
 
 pub trait Specifier {
     const BITS: usize;
-    type BackType;
+    type Get;
+    type Set;
 
-    fn from_u64(v: u64) -> Self::BackType;
-    fn into_u64(v: Self::BackType) -> u64;
+    fn from_u64(v: u64) -> Self::Get;
+    fn into_u64(v: Self::Set) -> u64;
+}
+
+pub struct Unrecognized {
+    pub raw: u64,
+}
+
+impl Specifier for bool {
+    const BITS: usize = 1;
+    type Get = bool;
+    type Set = bool;
+
+    fn from_u64(v: u64) -> Self::Get {
+        v == 1
+    }
+
+    fn into_u64(v: Self::Set) -> u64 {
+        v as u64
+    }
 }
 
 pub fn read_bits<const N: usize>(data: &[u8; N], bit_offset: usize, bit_size: usize) -> u64 {
