@@ -1,4 +1,4 @@
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{spanned::Spanned, Attribute, Error, Expr, ExprLit, Item, ItemEnum, Lit, Meta, Result};
 
@@ -7,39 +7,19 @@ pub(crate) fn generate(item: Item) -> Result<TokenStream2> {
         return Err(Error::new(item.span(), "expected struct by #[bitfied]"));
     };
 
-    let name = &e.ident;
+    let enum_name = &e.ident;
     let bits_attr = parse_bits_attr(&e.attrs)?;
     let bits = check_enum_variants_num(&e, bits_attr)?;
     let var_idents: Vec<_> = e.variants.iter().map(|v| &v.ident).collect();
-    let (get_type, from_fn) = if bits_attr.is_some() {
-        (
-            quote!( ::std::result::Result<#name, ::bitfield::Unrecognized> ),
-            quote!(
-                fn from_u64(v: u64) -> Self::Get {
-                    match v {
-                        #(x if x == #name::#var_idents as u64 => ::std::result::Result::Ok(#name::#var_idents),)*
-                        _ => ::std::result::Result::Err(::bitfield::Unrecognized{raw: v}),
-                    }
-                }
-            ),
-        )
-    } else {
-        (
-            quote!( #name ),
-            quote!(
-                fn from_u64(v: u64) -> Self::Get {
-                    match v {
-                        #(x if x == #name::#var_idents as u64 => #name::#var_idents,)*
-                        _ => ::std::panic!("#[bitfield] BitfieldSpecifier derive macro bug")
-                    }
-                }
-            ),
-        )
-    };
-    let set_type = quote!( #name );
+    let discriminant_checks = gen_discriminant_checks(enum_name, &var_idents, bits);
+    let get_type = gen_get_type(enum_name, bits_attr.is_some());
+    let set_type = quote!( #enum_name );
+    let from_fn = gen_from_fn(enum_name, &var_idents, bits_attr.is_some());
 
     Ok(quote!(
-        impl ::bitfield::Specifier for #name {
+        #(#discriminant_checks)*
+
+        impl ::bitfield::Specifier for #enum_name {
             const BITS: usize = #bits;
             type Get = #get_type;
             type Set = #set_type;
@@ -96,4 +76,56 @@ fn check_enum_variants_num(e: &ItemEnum, bits_attr: Option<(usize, &Attribute)>)
             Ok(e.variants.len().ilog2() as usize)
         }
     }
+}
+
+fn gen_get_type(enum_name: &Ident, exhaustive: bool) -> TokenStream2 {
+    if exhaustive {
+        quote!( ::std::result::Result<#enum_name, ::bitfield::Unrecognized> )
+    } else {
+        quote!( #enum_name )
+    }
+}
+
+fn gen_from_fn(enum_name: &Ident, var_idents: &[&Ident], exhaustive: bool) -> TokenStream2 {
+    if exhaustive {
+        quote!(
+            fn from_u64(v: u64) -> Self::Get {
+                match v {
+                    #(x if x == #enum_name::#var_idents as u64 => ::std::result::Result::Ok(#enum_name::#var_idents),)*
+                    _ => ::std::result::Result::Err(::bitfield::Unrecognized{raw: v}),
+                }
+            }
+        )
+    } else {
+        quote!(
+            fn from_u64(v: u64) -> Self::Get {
+                match v {
+                    #(x if x == #enum_name::#var_idents as u64 => #enum_name::#var_idents,)*
+                    _ => ::std::panic!("#[bitfield] BitfieldSpecifier derive macro bug")
+                }
+            }
+        )
+    }
+}
+
+fn gen_discriminant_checks(
+    enum_name: &Ident,
+    var_idents: &[&Ident],
+    bits: usize,
+) -> Vec<TokenStream2> {
+    let max_discriminant: u64 = !0 >> (64 - bits);
+    var_idents
+        .iter()
+        .map(|v| {
+            let msg = format!(
+                "enum discriminant `{}::{}` too large to fit int {} bits",
+                enum_name, v, bits
+            );
+            quote!(
+                const _:() = if (#enum_name::#v as u64) > #max_discriminant {
+                    ::std::panic!(#msg)
+                };
+            )
+        })
+        .collect()
 }
