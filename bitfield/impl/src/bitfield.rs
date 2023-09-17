@@ -1,6 +1,8 @@
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote, ToTokens};
+use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::{spanned::Spanned, Error, Fields, FieldsNamed, Item, ItemEnum, ItemStruct, Result};
+
+use crate::util::parse_bits_attr;
 
 pub(crate) fn generate(item: Item) -> Result<TokenStream2> {
     match item {
@@ -24,7 +26,7 @@ fn bitfield_struct(strukt: ItemStruct) -> Result<TokenStream2> {
     let Fields::Named(fields) = &strukt.fields else {
         return Err(Error::new(
             strukt.span(),
-            "tuple struct not supported by #[bitfield]",
+            "unit or tuple struct not supported by #[bitfield]",
         ));
     };
 
@@ -33,14 +35,18 @@ fn bitfield_struct(strukt: ItemStruct) -> Result<TokenStream2> {
     let vis = &strukt.vis;
 
     let total_bits = calc_total_bits(fields);
+
+    let bits_attr_checks = gen_bits_attr_checks(fields)?;
+
     let (getters, setters) = gen_accessors(&fields);
 
     Ok(quote!(
-
         #(#attrs)*
         #vis struct #name {
             data: [u8; #total_bits / 8]
         }
+
+        #bits_attr_checks
 
         impl #name {
             fn new() -> #name {
@@ -94,4 +100,28 @@ fn gen_accessors(fields: &FieldsNamed) -> (Vec<TokenStream2>, Vec<TokenStream2>)
     }
 
     (getters, setters)
+}
+
+fn gen_bits_attr_checks(fields: &FieldsNamed) -> Result<TokenStream2> {
+    fields
+        .named
+        .iter()
+        .map(|f| match parse_bits_attr(&f.attrs)? {
+            Some((bits, attr)) => {
+                let ty = &f.ty;
+                let msg = format!(
+                    "mismatch between bits of field `{}: {}` and #[bits = {}]",
+                    f.ident.as_ref().unwrap(),
+                    ty.into_token_stream(),
+                    bits
+                );
+                Ok(quote_spanned!(attr.meta.span()=>
+                    const _:() = if #bits != <#ty as ::bitfield::Specifier>::BITS {
+                        ::std::panic!(#msg)
+                    };
+                ))
+            }
+            None => Ok(quote!()),
+        })
+        .collect()
 }

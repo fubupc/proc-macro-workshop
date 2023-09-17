@@ -4,6 +4,7 @@ use syn::{parse_macro_input, Item};
 mod bitfield;
 mod derive_specifier;
 mod gen_b_types;
+mod util;
 
 /// Generate bitfield type for struct.
 #[proc_macro_attribute]
