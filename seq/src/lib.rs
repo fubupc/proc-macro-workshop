@@ -1,12 +1,12 @@
+use std::ops::Range;
+
 use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Group, Literal, TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, TokenStreamExt};
 use syn::{
     braced,
     parse::{Parse, ParseStream},
-    parse_macro_input,
-    spanned::Spanned,
-    token, Error, Ident, LitInt, Result, Token,
+    parse_macro_input, token, Error, Ident, LitInt, Result, Token,
 };
 
 #[proc_macro]
@@ -19,195 +19,165 @@ pub fn seq(input: TokenStream) -> TokenStream {
 }
 
 fn impl_seq(seq: &Seq) -> Result<TokenStream2> {
-    let range = if seq.inclusive {
+    let index_range = if seq.inclusive {
         seq.start..seq.end + 1
     } else {
         seq.start..seq.end
     };
 
-    if contains_repeat_section(seq.content.clone())? {
-        process_repeat_sections(seq.content.clone(), &|section| {
-            range
-                .clone()
-                .map(|n| process_ident(section.clone(), &seq.ident, n))
-                .collect()
-        })
+    let (expanded, repeat_found) = expand_repeat_sections(seq.content.clone(), &|section| {
+        gen_seq(section, &seq.index_ident, index_range.clone())
+    })?;
+
+    if repeat_found {
+        Ok(expanded)
     } else {
-        range
-            .map(|n| process_ident(seq.content.clone(), &seq.ident, n))
-            .collect()
+        // If no repeat section `#(...)*` found, just repeat the whole content of `seq!`
+        gen_seq(seq.content.clone(), &seq.index_ident, index_range)
     }
 }
 
-/// Check whether contains repeat section `#(...)*`
-fn contains_repeat_section(stream: TokenStream2) -> Result<bool> {
-    let mut stream = stream.into_iter().peekable();
-
-    while let Some(tt) = stream.next() {
-        match tt {
-            // Found `#`
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                match stream.peek() {
-                    // Found `#(...)`
-                    Some(TokenTree::Group(g))
-                        if matches!(g.delimiter(), Delimiter::Parenthesis) =>
-                    {
-                        // Consume `(...)` token actually
-                        stream.next();
-                        match stream.peek() {
-                            // Found `#(...)*`
-                            Some(TokenTree::Punct(p2)) if p2.as_char() == '*' => return Ok(true),
-                            other => {
-                                return Err(Error::new(
-                                    other.span(),
-                                    "expect `*` of repeat section `#(...)*`",
-                                ))
-                            }
-                        };
-                    }
-                    _ => {}
-                };
-            }
-            TokenTree::Group(g) => {
-                if contains_repeat_section(g.stream())? {
-                    return Ok(true);
-                }
-            }
-            _ => {}
-        };
-    }
-    Ok(false)
+/// Generate repeated sequence of token stream
+fn gen_seq(
+    ts: TokenStream2,
+    index_ident: &Ident,
+    index_range: Range<usize>,
+) -> Result<TokenStream2> {
+    index_range
+        .map(|n| replace_and_paste(ts.clone(), index_ident, n))
+        .collect()
 }
 
-fn process_repeat_sections<F>(
+/// Expand inner repeat sections `#(...)*` if exist.
+fn expand_repeat_sections<F>(
     stream: TokenStream2,
-    repeat_section_callback: &F,
-) -> Result<TokenStream2>
+    repeat_callback: &F,
+) -> Result<(TokenStream2, bool)>
 where
     F: Fn(TokenStream2) -> Result<TokenStream2>,
 {
-    let mut stream = stream.into_iter().peekable();
+    let mut remaining = stream.into_iter();
     let mut result = TokenStream2::new();
+    let mut repeat_found = false;
 
-    while let Some(tt) = stream.next() {
+    while let Some(tt) = remaining.next() {
         match tt {
-            // Found `#`
-            TokenTree::Punct(p) if p.as_char() == '#' => {
-                match stream.peek() {
-                    // Found `#(...)`
-                    Some(TokenTree::Group(g))
-                        if matches!(g.delimiter(), Delimiter::Parenthesis) =>
-                    {
-                        // Consume `(...)` token actually
-                        let g = match stream.next() {
-                            Some(TokenTree::Group(g)) => g,
-                            _ => unreachable!(),
-                        };
-                        match stream.peek() {
-                            // Found `#(...)*`
-                            Some(TokenTree::Punct(p2)) if p2.as_char() == '*' => {
-                                // Consume `*` token actually
-                                stream.next();
-
-                                // Generate repeat sections
-                                let repeated = repeat_section_callback(g.stream())?;
-                                result.extend(repeated);
-                            }
-                            other => {
-                                return Err(Error::new(
-                                    other.span(),
-                                    "expect `*` of repeat section `#(...)*`",
-                                ))
-                            }
-                        };
-                        g
-                    }
-                    _ => {
-                        result.append(TokenTree::Punct(p));
-                        continue;
-                    }
-                };
-            }
             TokenTree::Group(g) => {
-                let delimiter = g.delimiter();
-                let processed = process_repeat_sections(g.stream(), repeat_section_callback)?;
-                result.append(TokenTree::Group(Group::new(delimiter, processed)));
+                let (expanded, _repeat_found) =
+                    expand_repeat_sections(g.stream(), repeat_callback)?;
+                repeat_found |= _repeat_found;
+                result.append(Group::new(g.delimiter(), expanded));
+            }
+            // Search for `#(...)*` pattern
+            TokenTree::Punct(p) if p.as_char() == '#' => {
+                let mut peeker = remaining.clone();
+                match (peeker.next(), peeker.next()) {
+                    (Some(TokenTree::Group(g)), Some(TokenTree::Punct(p2)))
+                        if matches!(g.delimiter(), Delimiter::Parenthesis)
+                            && p2.as_char() == '*' =>
+                    {
+                        repeat_found = true;
+                        let (expanded, _) = expand_repeat_sections(g.stream(), repeat_callback)?;
+                        result.extend(repeat_callback(expanded)?);
+                        remaining = peeker;
+                    }
+                    _ => result.append(p),
+                }
             }
             _ => result.append(tt),
-        };
+        }
     }
 
-    Ok(result)
+    Ok((result, repeat_found))
 }
 
-fn process_ident(stream: TokenStream2, seq_ident: &Ident, num: usize) -> Result<TokenStream2> {
-    let mut stream = stream.into_iter().peekable();
+// Replace index identifier with number in token stream. Paste tokens connected by `~`.
+fn replace_and_paste(
+    stream: TokenStream2,
+    index_ident: &Ident,
+    index_num: usize,
+) -> Result<TokenStream2> {
+    let mut remaining = stream.into_iter();
     let mut result = TokenStream2::new();
 
-    while let Some(tt) = stream.next() {
+    while let Some(tt) = remaining.next() {
         match tt {
             TokenTree::Group(g) => {
-                let delimiter = g.delimiter();
-                let pasted = process_ident(g.stream(), seq_ident, num)?;
-                result.append(TokenTree::Group(Group::new(delimiter, pasted)))
+                let replaced = replace_and_paste(g.stream(), index_ident, index_num)?;
+                result.append(Group::new(g.delimiter(), replaced))
             }
+            // Assuming `N` is the `seq!` index.
             TokenTree::Ident(i) => {
-                if &i == seq_ident {
-                    match stream.peek() {
-                        Some(TokenTree::Punct(p)) if p.as_char() == '~' => return Err(Error::new(
-                            i.span(),
-                            "identifier cannot be start with number (produced by seq identifier)",
-                        )),
-                        _ => result.append(TokenTree::Literal(Literal::usize_unsuffixed(num))),
-                    };
+                if &i == index_ident {
+                    // `N~...` is invalid because the symbol generated by paste operation will be an invalid identifier
+                    // start with number.
+                    let mut peeker = remaining.clone();
+                    if let Some(TokenTree::Punct(p)) = peeker.next() {
+                        if p.as_char() == '~' {
+                            return Err(Error::new(
+                                i.span(),
+                                "seq!: non-standalone index identifier cannot be the start of paste expression",
+                        ));
+                        }
+                    }
+                    // Standalone `N` is ok to be replaced by literal number.
+                    result.append(Literal::usize_unsuffixed(index_num));
                 } else {
-                    let mut curr = i;
-                    loop {
-                        match stream.peek() {
-                            Some(TokenTree::Punct(p)) if p.as_char() == '~' => {
-                                stream.next(); // pop ~
-                                match stream.next() {
-                                    Some(TokenTree::Ident(i2)) => {
-                                        if &i2 == seq_ident {
-                                            curr = format_ident!("{}{}", curr, num);
-                                        } else {
-                                            curr = format_ident!("{}{}", curr, i2);
-                                        }
-                                    }
-                                    other => {
-                                        return Err(Error::new(
-                                            other.span(),
-                                            "paste operator ~ must be followed by an identifier",
-                                        ))
-                                    }
-                                }
-                            }
-                            _ => {
-                                result.append(curr);
-                                break;
-                            }
-                        };
+                    let (pasted, consumed_tokens) =
+                        peek_and_paste(index_ident, index_num, i, remaining.clone())?;
+                    result.append(pasted);
+                    for _ in 0..consumed_tokens {
+                        remaining.next();
                     }
                 }
             }
-            TokenTree::Punct(p) => {
-                if p.as_char() == '~' {
-                    return Err(Error::new(
-                        p.span(),
-                        "paste operator ~ must be preceded by an identifier",
-                    ));
-                } else {
-                    result.append(TokenTree::Punct(p))
-                }
-            }
-            TokenTree::Literal(l) => result.append(TokenTree::Literal(l)),
+            _ => result.append(tt),
         }
     }
     Ok(result)
 }
 
+// Paste tokens connected by `~`
+// Example: `a~N~b~N~666~c` (N=1) should produce `a1b1666c`.
+fn peek_and_paste(
+    index_ident: &Ident,
+    index_num: usize,
+    first: Ident,
+    mut peeker: impl Iterator<Item = TokenTree>,
+) -> Result<(Ident, usize)> {
+    let mut pasted = first;
+    let mut consumed_tokens = 0;
+
+    while let Some(TokenTree::Punct(p)) = peeker.next() {
+        if p.as_char() != '~' {
+            break;
+        }
+        consumed_tokens += 2;
+        match peeker.next() {
+            Some(TokenTree::Ident(i2)) => {
+                if &i2 == index_ident {
+                    pasted = format_ident!("{}{}", pasted, index_num);
+                } else {
+                    pasted = format_ident!("{}{}", pasted, i2);
+                }
+            }
+            Some(TokenTree::Literal(lit)) => {
+                pasted = format_ident!("{}{}", pasted, lit.to_string());
+            }
+            _ => {
+                return Err(Error::new(
+                    p.span(),
+                    "seq!: paste operator `~` must be followed by identifier or literal integer",
+                ))
+            }
+        }
+    }
+
+    Ok((pasted, consumed_tokens))
+}
+
 struct Seq {
-    ident: Ident,
+    index_ident: Ident,
     start: usize,
     inclusive: bool,
     end: usize,
@@ -225,7 +195,7 @@ impl Parse for Seq {
         let content;
         let _brace_token: token::Brace = braced!(content in input);
         Ok(Seq {
-            ident,
+            index_ident: ident,
             start,
             inclusive,
             end,
